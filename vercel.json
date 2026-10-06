@@ -1,1 +1,1 @@
-{"$schema":"https://openapi.vercel.sh/vercel.json","functions":{"api/**/*.ts":{"runtime":"nodejs20.x"}}}
+{"$schema":"https://openapi.vercel.sh/vercel.json","functions":{"api/**/*.ts":{"runtime":"nodejs20.x"}},"crons":[{"path":"/api/outbox","schedule":"* * * * *"}]}

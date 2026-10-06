@@ -25,27 +25,116 @@ export interface Order {
 
 export interface OrderStore {
   get(id: string): Promise<Order | null>;
+  create(order: Order): Promise<boolean>;
   save(order: Order): Promise<void>;
-  /** Returns true if this event was already processed (idempotency). */
-  seenEvent(eventId: string): Promise<boolean>;
-  markEvent(eventId: string): Promise<void>;
+  findLatestOpenByBuyer(buyerNumber: string): Promise<Order | null>;
+  associateCheckout(checkoutRequestId: string, orderId: string): Promise<void>;
+  findByCheckout(checkoutRequestId: string): Promise<Order | null>;
+  claimEvent(eventId: string): Promise<boolean>;
+  completeEvent(eventId: string): Promise<void>;
+  retryEvent(eventId: string): Promise<void>;
+  commitResolution(order: Order, sourceKey: string, notifications: Notification[]): Promise<void>;
+  claimNotifications(orderId?: string): Promise<QueuedNotification[]>;
+  markNotificationSent(id: string): Promise<void>;
+  retryNotification(id: string): Promise<void>;
+}
+
+export interface Notification {
+  recipient: string;
+  body: string;
+}
+
+export interface QueuedNotification extends Notification {
+  id: string;
+  orderId: string;
 }
 
 export class InMemoryOrderStore implements OrderStore {
   orders = new Map<string, Order>();
-  private events = new Set<string>();
+  private checkouts = new Map<string, string>();
+  private events = new Map<string, "processing" | "completed" | "retryable">();
+  private notifications = new Map<string, QueuedNotification & {
+    sourceKey: string;
+    status: "pending" | "sending" | "sent";
+  }>();
 
   async get(id: string): Promise<Order | null> {
     return this.orders.get(id) ?? null;
   }
+  async create(order: Order): Promise<boolean> {
+    if (this.orders.has(order.id)) return false;
+    await this.save(order);
+    return true;
+  }
   async save(order: Order): Promise<void> {
     this.orders.set(order.id, { ...order, updatedAt: new Date().toISOString() });
   }
-  async seenEvent(eventId: string): Promise<boolean> {
-    return this.events.has(eventId);
+
+  async findLatestOpenByBuyer(buyerNumber: string): Promise<Order | null> {
+    return [...this.orders.values()]
+      .filter((order) => order.buyerNumber === buyerNumber && !isTerminal(order))
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0] ?? null;
   }
-  async markEvent(eventId: string): Promise<void> {
-    this.events.add(eventId);
+
+  async associateCheckout(checkoutRequestId: string, orderId: string): Promise<void> {
+    this.checkouts.set(checkoutRequestId, orderId);
+  }
+
+  async findByCheckout(checkoutRequestId: string): Promise<Order | null> {
+    const orderId = this.checkouts.get(checkoutRequestId);
+    return orderId ? this.get(orderId) : null;
+  }
+
+  async claimEvent(eventId: string): Promise<boolean> {
+    const status = this.events.get(eventId);
+    if (status === "completed" || status === "processing") return false;
+    this.events.set(eventId, "processing");
+    return true;
+  }
+
+  async completeEvent(eventId: string): Promise<void> {
+    this.events.set(eventId, "completed");
+  }
+
+  async retryEvent(eventId: string): Promise<void> {
+    this.events.set(eventId, "retryable");
+  }
+
+  async commitResolution(order: Order, sourceKey: string, notifications: Notification[]): Promise<void> {
+    this.orders.set(order.id, { ...order, updatedAt: new Date().toISOString() });
+    notifications.forEach((notification, index) => {
+      const id = `${sourceKey}:${index}`;
+      if (!this.notifications.has(id)) {
+        this.notifications.set(id, {
+          ...notification,
+          id,
+          orderId: order.id,
+          sourceKey,
+          status: "pending",
+        });
+      }
+    });
+  }
+
+  async claimNotifications(orderId?: string): Promise<QueuedNotification[]> {
+    const claimed = [...this.notifications.values()].filter(
+      (notification) =>
+        notification.status === "pending" && (!orderId || notification.orderId === orderId)
+    );
+    claimed.forEach((notification) => {
+      notification.status = "sending";
+    });
+    return claimed;
+  }
+
+  async markNotificationSent(id: string): Promise<void> {
+    const notification = this.notifications.get(id);
+    if (notification) notification.status = "sent";
+  }
+
+  async retryNotification(id: string): Promise<void> {
+    const notification = this.notifications.get(id);
+    if (notification) notification.status = "pending";
   }
 }
 

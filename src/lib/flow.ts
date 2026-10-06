@@ -13,9 +13,9 @@ import type { TrustEngineClient, AttestationEvent } from "./trust-engine.js";
 import {
   transition,
   isTerminal,
-  InMemoryOrderStore,
   type Order,
   type OrderStore,
+  type Notification,
 } from "./orders.js";
 
 export interface PaymentFlowDeps {
@@ -51,11 +51,12 @@ export class PaymentFlow {
   /** Buyer replied "1": dispatch STK push to their phone. */
   async startStkPayment(order: Order): Promise<void> {
     try {
-      await initiateStkPush({
+      const result = await initiateStkPush({
         phoneNumber: order.buyerNumber,
         amount: order.amount,
         orderRef: order.id,
       });
+      await this.deps.store.associateCheckout(result.CheckoutRequestID, order.id);
       await this.send(order.buyerNumber, copy.stkSent(order.amount, maskPhone(order.buyerNumber)));
     } catch (err) {
       console.error("STK push failed:", err);
@@ -87,11 +88,15 @@ export class PaymentFlow {
     order.attestationId = attestation.id;
     order.lastReasonCode = attestation.reasonCode;
     await this.deps.store.save(order);
-    // Terminal outcomes are resolved here; PENDING_CALLBACK waits for the
-    // attestation.completed webhook from the engine's C2B ingress.
-    if (attestation.status !== "pending") {
-      await this.resolveAttestation(order, attestation.reasonCode, attestation);
+    const sourceKey = `attestation:${attestation.id}`;
+    if (attestation.status === "pending") {
+      await this.deps.store.commitResolution(order, sourceKey, [
+        { recipient: order.buyerNumber, body: copy.buyerFailed("PENDING_CALLBACK", order.amount) },
+      ]);
+    } else {
+      await this.resolveAttestation(order, attestation.reasonCode, attestation, sourceKey);
     }
+    await this.flushOutbox(order.id);
   }
 
   /**
@@ -100,32 +105,73 @@ export class PaymentFlow {
    */
   async handleAttestationEvent(event: AttestationEvent): Promise<void> {
     const store = this.deps.store;
-    if (await store.seenEvent(event.eventId)) return;
-    await store.markEvent(event.eventId);
-
-    const orderRef = event.attestation.evidence.orderRef as string | undefined;
-    const order = orderRef ? await store.get(orderRef) : null;
-    if (!order || isTerminal(order)) return;
-
-    await this.resolveAttestation(order, event.attestation.reasonCode, event.attestation);
+    if (!(await store.claimEvent(event.eventId))) return;
+    try {
+      const orderRef = event.attestation.evidence.orderRef as string | undefined;
+      const order = orderRef ? await store.get(orderRef) : null;
+      if (!order) throw new Error("Attestation event references an unknown order");
+      if (!isTerminal(order)) {
+        await this.resolveAttestation(
+          order,
+          event.attestation.reasonCode,
+          event.attestation,
+          `event:${event.eventId}`
+        );
+        await this.flushOutbox(order.id);
+      }
+      await store.completeEvent(event.eventId);
+    } catch (err) {
+      await store.retryEvent(event.eventId);
+      throw err;
+    }
   }
 
   private async resolveAttestation(
     order: Order,
     reasonCode: string,
-    attestation: { evidence: { amount?: number | unknown } }
+    attestation: { id?: string; evidence: { amount?: number | unknown } },
+    sourceKey: string
   ): Promise<void> {
     const store = this.deps.store;
+    const resolved = { ...order, attestationId: attestation.id ?? order.attestationId, lastReasonCode: reasonCode };
+    let updated: Order;
+    let notifications: Notification[];
     if (reasonCode === "MATCHED") {
-      await store.save(transition(order, "verified"));
-      await this.send(order.buyerNumber, copy.buyerVerified(order.id));
-      await this.send(order.vendorId, copy.vendorVerified(this.orderSummary(order)));
+      updated = transition(resolved, "verified");
+      notifications = [
+        { recipient: order.buyerNumber, body: copy.buyerVerified(order.id) },
+        { recipient: order.vendorId, body: copy.vendorVerified(this.orderSummary(order)) },
+      ];
     } else {
-      await store.save(transition(order, "failed"));
-      const received = typeof attestation.evidence.amount === "number" ? attestation.evidence.amount : undefined;
-      await this.send(order.buyerNumber, copy.buyerFailed(reasonCode, order.amount, received));
-      await this.send(order.vendorId, copy.vendorFailed(order.id));
+      updated = { ...resolved, state: "awaiting_payment" };
+      if (reasonCode === "PENDING_CALLBACK") {
+        notifications = [
+          { recipient: order.buyerNumber, body: copy.buyerFailed(reasonCode, order.amount) },
+        ];
+      } else {
+        const received = typeof attestation.evidence.amount === "number" ? attestation.evidence.amount : undefined;
+        notifications = [
+          { recipient: order.buyerNumber, body: copy.buyerFailed(reasonCode, order.amount, received) },
+          { recipient: order.vendorId, body: copy.vendorFailed(order.id) },
+        ];
+      }
     }
+    await store.commitResolution(updated, sourceKey, notifications);
+  }
+
+  async flushOutbox(orderId?: string): Promise<void> {
+    const notifications = await this.deps.store.claimNotifications(orderId);
+    const failures: unknown[] = [];
+    for (const notification of notifications) {
+      try {
+        await this.send(notification.recipient, notification.body);
+        await this.deps.store.markNotificationSent(notification.id);
+      } catch (err) {
+        await this.deps.store.retryNotification(notification.id);
+        failures.push(err);
+      }
+    }
+    if (failures.length) throw failures[0];
   }
 
   /** Route a buyer's free-text reply while the order awaits payment. */
@@ -140,13 +186,6 @@ export class PaymentFlow {
 
   /** Latest non-terminal order for a buyer number (Supabase: indexed query). */
   async findOpenOrderFor(buyerNumber: string): Promise<Order | null> {
-    const store = this.deps.store;
-    if (store instanceof InMemoryOrderStore) {
-      const open = [...store.orders.values()]
-        .filter((o) => o.buyerNumber === buyerNumber && !isTerminal(o))
-        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
-      return open[0] ?? null;
-    }
-    return null;
+    return this.deps.store.findLatestOpenByBuyer(buyerNumber);
   }
 }

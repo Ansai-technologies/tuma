@@ -44,8 +44,11 @@ On `MATCHED`: buyer gets "Payment verified for order …", vendor gets
 On any failure: vendor gets "Do not release the goods yet."
 
 ### Order state machine
-`open → awaiting_payment → verified | failed`. Terminal states cannot be
-re-entered. All webhook handling is idempotent on the engine's `eventId`.
+An order moves from `open` to `awaiting_payment`; retryable attestation
+outcomes leave it in `awaiting_payment`, and a `MATCHED` result moves it to
+`verified`. Webhook event claims are atomic and retryable, and notification
+delivery uses a persistent outbox with separate delivery state for each
+recipient.
 
 ## Contract linkage
 
@@ -68,6 +71,7 @@ Deterministic test prefixes: `OK`→MATCHED, `AMT`→AMOUNT_MISMATCH,
 - `POST /api/webhooks/attestation` — Trust Engine events (signature-verified, idempotent)
 - `POST /api/mpesa/stk-result` — Daraja sandbox STK result callback
 - `POST /api/orders` — order intake (creates `open` orders for vendor tooling)
+- `GET /api/outbox` — authenticated scheduled worker for pending notifications
 
 ## Setup checklist — from the founder
 
@@ -81,6 +85,14 @@ Exact values needed; nothing here is optional for a live pilot:
 6. **Daraja sandbox credentials** — consumer key, consumer secret, shortcode, LNM passkey (Safaricom Developer Portal, sandbox app)
 7. **Trust Engine base URL + API key** (once Track A deploys) — until then, `TRUST_ENGINE_MODE=mock`
 8. **`ATTESTATION_WEBHOOK_SECRET`** — generated shared secret; must match what Track A registers
+9. **Supabase project URL and service-role key** — shared order, checkout, webhook-event, and notification-outbox storage
+10. **Vendor API tokens** — configure `VENDOR_API_TOKENS` as a JSON object mapping each vendor's WhatsApp number to a unique token
+11. **`WHATSAPP_APP_SECRET`** — Meta app secret for validating inbound webhook signatures
+12. **`CRON_SECRET`** — secret used by the scheduled notification worker
+
+Apply `supabase/schema.sql` to the configured Supabase project before deploying.
+The `POST /api/orders` route requires an `Authorization` header using the
+bearer-token scheme; the token must be mapped to the submitted `vendorId`.
 
 Secrets land in the deployment environment / secrets manager only. Never in
 code, chat, or this repo.
@@ -98,10 +110,9 @@ capture-sink sender in tests.
 
 ## Known v0.1 limitations
 
-- `InMemoryOrderStore` — swap for the Supabase `OrderStore` implementation
-  (`orders` + `processed_webhook_events` tables) before any real traffic.
-- The Vercel serverless instances each hold their own in-memory store — shared
-  storage is required before deploy.
-- WhatsApp module is scaffolding (env placeholders only); no sends are made in tests.
+- Shared order state and notification delivery require the configured Supabase
+  schema; the in-memory store is used only by tests.
+- The scheduled outbox worker requires `CRON_SECRET` in the deployment environment.
+- WhatsApp webhook signatures are checked against the raw request body.
 - Daraja is sandbox-only per the hard limits.
 - User-facing copy is standard English only — Swahili/Sheng is a later differentiator.

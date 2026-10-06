@@ -6,9 +6,9 @@
  */
 import type { VercelRequest, VercelResponse } from "../_types.js";
 import { PaymentFlow } from "../../src/lib/flow.js";
-import { InMemoryOrderStore } from "../../src/lib/orders.js";
+import { createOrderStore } from "../../src/lib/supabase-order-store.js";
 
-const store = new InMemoryOrderStore(); // TODO: shared store (Supabase)
+const store = createOrderStore();
 const flow = new PaymentFlow({ store });
 
 interface StkCallbackItem {
@@ -30,19 +30,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!cb) return res.status(400).send("Bad payload");
 
     const items = cb.CallbackMetadata?.Item ?? [];
-    const orderRef = String(items.find((i) => i.Name === "AccountReference")?.Value ?? "");
     const transactionCode = String(
       items.find((i) => i.Name === "MpesaReceiptNumber")?.Value ?? ""
     );
 
-    if (cb.ResultCode !== 0 || !orderRef || !transactionCode) {
+    if (cb.ResultCode !== 0 || !transactionCode) {
       console.log("STK unsuccessful or incomplete:", cb.ResultCode, cb.ResultDesc);
       return res.status(200).send("ok");
     }
 
-    const order = await store.get(orderRef);
+    const order = await store.findByCheckout(cb.CheckoutRequestID);
     if (!order) {
-      console.error("STK result for unknown order:", orderRef);
+      console.error("STK result for unknown checkout:", cb.CheckoutRequestID);
       return res.status(200).send("ok");
     }
     await flow.submitTransactionCode(order, transactionCode);

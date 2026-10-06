@@ -42,8 +42,13 @@ export interface StkPushParams {
   orderRef: string; // becomes the AccountReference in Daraja
 }
 
+export interface StkPushResult {
+  CheckoutRequestID: string;
+  MerchantRequestID: string;
+}
+
 /** Dispatch an STK push to the buyer's phone (Daraja SANDBOX only). */
-export async function initiateStkPush({ phoneNumber, amount, orderRef }: StkPushParams): Promise<void> {
+export async function initiateStkPush({ phoneNumber, amount, orderRef }: StkPushParams): Promise<StkPushResult> {
   const shortcode = process.env.DARAJA_SHORTCODE;
   const passkey = process.env.DARAJA_PASSKEY;
   const callbackUrl = process.env.DARAJA_STK_CALLBACK_URL;
@@ -74,6 +79,14 @@ export async function initiateStkPush({ phoneNumber, amount, orderRef }: StkPush
     const detail = await res.text().catch(() => "");
     throw new Error(`Daraja STK push failed ${res.status}: ${detail}`);
   }
+  const result = (await res.json()) as Partial<StkPushResult>;
+  if (!result.CheckoutRequestID || !result.MerchantRequestID) {
+    throw new Error("Daraja STK push response did not include request IDs");
+  }
+  return {
+    CheckoutRequestID: result.CheckoutRequestID,
+    MerchantRequestID: result.MerchantRequestID,
+  };
 }
 
 /** Mask a phone number for messages, e.g. 254712345678 -> 0712***678. */
