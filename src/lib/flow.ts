@@ -56,7 +56,28 @@ export class PaymentFlow {
         amount: order.amount,
         orderRef: order.id,
       });
-      await this.deps.store.associateCheckout(result.CheckoutRequestID, order.id);
+      // The STK result callback correlates ONLY via CheckoutRequestID, so this
+      // link must survive. Retry briefly: a lost link means a paid order whose
+      // callback can never be matched ("unknown checkout", payment unattested).
+      let linked = false;
+      for (let attempt = 1; attempt <= 3 && !linked; attempt++) {
+        try {
+          await this.deps.store.associateCheckout(result.CheckoutRequestID, order.id);
+          linked = true;
+        } catch (err) {
+          console.error(
+            `associateCheckout attempt ${attempt}/3 failed (order ${order.id}, checkout ${result.CheckoutRequestID}):`,
+            err,
+          );
+          if (attempt < 3) await new Promise((r) => setTimeout(r, 1000));
+        }
+      }
+      if (!linked) {
+        console.error(
+          `STK checkout ${result.CheckoutRequestID} could not be linked to order ${order.id} — ` +
+            `manual reconciliation required if the buyer completes the prompt.`,
+        );
+      }
       await this.send(order.buyerNumber, copy.stkSent(order.amount, maskPhone(order.buyerNumber)));
     } catch (err) {
       console.error("STK push failed:", err);

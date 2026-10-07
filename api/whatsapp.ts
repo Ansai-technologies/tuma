@@ -22,10 +22,14 @@ const flow = new PaymentFlow({ store });
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === "GET") {
     // WhatsApp subscription verification handshake.
+    const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN;
+    // Fail closed: with no configured token, `undefined === undefined` would
+    // accept ANY handshake and let an attacker subscribe their own endpoint.
+    if (!verifyToken) return res.status(403).send("Forbidden");
     const mode = req.query["hub.mode"];
     const token = req.query["hub.verify_token"];
     const challenge = req.query["hub.challenge"];
-    if (mode === "subscribe" && token === process.env.WHATSAPP_VERIFY_TOKEN) {
+    if (mode === "subscribe" && token === verifyToken) {
       return res.status(200).send(challenge as string);
     }
     return res.status(403).send("Forbidden");
