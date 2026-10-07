@@ -7,6 +7,7 @@
 import type { VercelRequest, VercelResponse } from "../_types.js";
 import { PaymentFlow } from "../../src/lib/flow.js";
 import { createOrderStore } from "../../src/lib/supabase-order-store.js";
+import { allowlistPermits, callerIp } from "../../src/lib/net.js";
 
 const store = createOrderStore();
 const flow = new PaymentFlow({ store });
@@ -25,6 +26,18 @@ interface StkCallback {
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "POST") return res.status(405).send("Method not allowed");
+  // Daraja does not sign result callbacks, so the caller allowlist IS the
+  // authentication. Fail closed: an empty/unset allowlist rejects everything
+  // unless MPESA_CALLBACK_ALLOWLIST_BYPASS=true (sandbox/local testing only —
+  // never in production). Denied caller IPs are logged so the real Safaricom
+  // egress IPs can be allowlisted iteratively.
+  const allowlist = process.env.MPESA_CALLBACK_ALLOWLIST ?? "";
+  const bypass = process.env.MPESA_CALLBACK_ALLOWLIST_BYPASS === "true";
+  const ip = callerIp(req);
+  if (!bypass && !allowlistPermits(allowlist, ip)) {
+    console.warn(`STK result callback denied for non-allowlisted caller ${ip || "(unknown)"}`);
+    return res.status(403).send("Forbidden");
+  }
   try {
     const cb = req.body?.Body?.stkCallback as StkCallback | undefined;
     if (!cb) return res.status(400).send("Bad payload");
