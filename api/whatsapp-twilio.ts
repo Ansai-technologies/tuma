@@ -40,7 +40,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const host = req.headers?.host;
     const hostStr = typeof host === "string" ? host : "";
     const url = "https://" + hostStr + "/api/whatsapp-twilio";
+    console.log("twilio webhook hit", {
+      sid: params.get("MessageSid"),
+      from: params.get("From"),
+      url: url,
+    });
     if (!verifyTwilioSignature(url, params, signature)) {
+      console.warn("twilio signature mismatch", { url: url });
       return res.status(401).send("Unauthorized");
     }
   } catch {
@@ -49,6 +55,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const from = stripWhatsAppPrefix(params.get("From") || "");
     const text = params.get("Body") || "";
+    console.log("twilio webhook routed", { from: from, textLength: text.length });
     if (!from || !text) return res.status(200).send("ok");
 
     // Vendor confirms an order: "CONFIRM TUMA-1042"
