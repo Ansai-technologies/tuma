@@ -23,3 +23,24 @@ export function verifyWhatsAppSignature(rawBody: Uint8Array, signature: string |
   const b = Buffer.from(signature);
   return a.length === b.length && timingSafeEqual(a, b);
 }
+
+/**
+ * Twilio webhook signature: HMAC-SHA1 (base64) of the full request URL plus
+ * every POST param as key+value, keys sorted alphabetically, keyed by the
+ * Auth Token. Sent as the X-Twilio-Signature header.
+ */
+export function verifyTwilioSignature(
+  url: string,
+  params: URLSearchParams,
+  signature: string | null
+): boolean {
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  if (!token || !signature) return false;
+  const keys = Array.from(new Set(Array.from(params.keys()))).sort();
+  let data = url;
+  for (const k of keys) data += k + (params.get(k) ?? "");
+  const expected = createHmac("sha1", token).update(data, "utf8").digest("base64");
+  const a = Buffer.from(expected);
+  const b = Buffer.from(signature);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
