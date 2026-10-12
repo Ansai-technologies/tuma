@@ -1,4 +1,1 @@
-{
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-  "outputDirectory": "dist"
-}
+{"$schema":"https://openapi.vercel.sh/vercel.json","outputDirectory":"dist","rewrites":[{"destination":"/api/dashboard","source":"/dashboard"}]}
