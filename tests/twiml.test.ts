@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { twiml } from "../src/lib/twiml.js";
 
-// Regression guard for the 2026-10-13 silent-reply bug: the webhook ran,
-// the order moved, but Twilio created NO outbound message from replies
-// whose <Message> carried attributes — first to-only, then to+from
-// (verified against the Twilio console message log). The reply must be
-// the bare quickstart shape: <Message>body</Message>, no attributes.
+// The reply is the bare quickstart shape: <Message>body</Message>, no
+// attributes — a response message is a reply in the inbound conversation,
+// so naming to/from adds nothing and risks the platform treating it as
+// an originated message instead. (The 2026-10-13 silent replies turned
+// out to be Twilio's un-activated sandbox, not this document — but the
+// bare shape is the canonical one and stays.)
 describe("twiml replies", () => {
   it("emits bare Message elements with no to/from attributes", () => {
     const xml = twiml([{ to: "254798435456", body: "Order confirmed." }]);
