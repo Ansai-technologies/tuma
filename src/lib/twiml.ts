@@ -1,34 +1,38 @@
 /**
- * TwiML construction for synchronous WhatsApp replies (Twilio sandbox path).
+ * Build the TwiML document returned to Twilio for a WhatsApp webhook.
  *
- * Twilio rule: a <Message> in a webhook response that names a "to" MUST
- * also name a "from" — the Twilio number that received the inbound message.
- * A to-only message is silently dropped by Twilio (the webhook returns 200
- * and nothing reaches the phone), which is why every reply built here
- * carries both attributes.
+ * Deliberately BARE: <Message> carries NO to/from attributes. Twilio's
+ * WhatsApp sandbox silently creates NO outbound message when the reply
+ * <Message> carries attributes (verified 2026-10-13 against the console
+ * message log: inbound webhooks ran, zero outbound SIDs existed — first
+ * with to-only, then with to+from). The bare form — the shape in Twilio's
+ * own WhatsApp quickstart — is a reply in the inbound conversation, which
+ * is the only delivery the webhook response can be trusted to make.
+ *
+ * Consequence: a webhook reply can only reach the person who just
+ * messaged. Copies addressed to anyone else (e.g. the buyer when the
+ * vendor sends CONFIRM) must travel via the notification outbox, never
+ * via this document.
  */
-
 export function escapeXml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
 }
 
-/**
- * Build the TwiML response for captured reply messages.
- * `fromAddr` is the Twilio address the inbound message arrived on
- * (the webhook's "To" parameter, e.g. "whatsapp:+17372508034").
- */
-export function twiml(messages: Array<{ to: string; body: string }>, fromAddr: string): string {
-  const items = messages
-    .map(
-      (m) =>
-        '  <Message to="whatsapp:+' +
-        m.to.replace(/^\+/, "") +
-        '" from="' +
-        fromAddr +
-        '">' +
-        escapeXml(m.body) +
-        "</Message>",
-    )
-    .join("\n");
-  return '<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n' + items + "\n</Response>";
+// `to` is accepted for caller bookkeeping (and future outbox routing)
+// but deliberately NOT rendered — see the note above.
+export function twiml(messages: Array<{ to?: string; body: string }>): string {
+  const parts = messages.map(
+    (m) => `  <Message>${escapeXml(m.body)}</Message>`,
+  );
+  return (
+    '<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n' +
+    parts.join("\n") +
+    (parts.length ? "\n" : "") +
+    "</Response>"
+  );
 }

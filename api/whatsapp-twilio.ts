@@ -71,9 +71,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).send("Bad payload");
   }
 
-  // The Twilio number this message arrived on — the "from" of every reply.
-  const replyFrom = params.get("To") || "";
-
   const captured: Array<{ to: string; body: string }> = [];
   const flow = new PaymentFlow({
     store,
@@ -86,7 +83,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const from = stripWhatsAppPrefix(params.get("From") || "");
     const text = params.get("Body") || "";
     console.log("twilio webhook routed", { from: from, textLength: text.length });
-    if (!from || !text) return sendXml(twiml([], replyFrom));
+    if (!from || !text) return sendXml(twiml([]));
 
     // Vendor confirms an order: "CONFIRM TUMA-1042"
     if (/^confirm\s+\S+/i.test(text)) {
@@ -94,11 +91,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const order = await store.get(ref);
       if (!order) {
         captured.push({ to: from, body: "Sorry, I could not find order " + ref + "." });
-        return sendXml(twiml(captured, replyFrom));
+        return sendXml(twiml(captured));
       }
-      if (from !== order.vendorId) return sendXml(twiml([], replyFrom));
+      if (from !== order.vendorId) return sendXml(twiml([]));
       await flow.confirmOrder(order);
-      return sendXml(twiml(captured, replyFrom));
+      return sendXml(twiml(captured));
     }
 
     // Otherwise this is a buyer reply on their open order: find their
@@ -106,14 +103,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const order = await flow.findOpenOrderFor(from);
     if (!order) {
       captured.push({ to: from, body: copy.unrecognized() });
-      return sendXml(twiml(captured, replyFrom));
+      return sendXml(twiml(captured));
     }
     await flow.handleBuyerReply(order, text);
-    return sendXml(twiml(captured, replyFrom));
+    return sendXml(twiml(captured));
   } catch (err) {
     console.error("twilio whatsapp webhook error:", err);
     try {
-      return sendXml(twiml(captured, replyFrom));
+      return sendXml(twiml(captured));
     } catch {
       return res.status(200).send("ok");
     }
