@@ -15,6 +15,11 @@
  * <Response><Message> items. (Production senders allow REST Body sends;
  * see src/lib/whatsapp.ts.)
  *
+ * TwiML RULE (learned live 2026-10-13): a <Message> in a webhook response
+ * that names a "to" MUST also name a "from" (the Twilio number that received
+ * the inbound message) — a to-only message is silently dropped by Twilio:
+ * the webhook returns 200, state moves, and no reply ever reaches the phone.
+ *
  * Configure in Twilio Console -> Messaging -> Try it out -> WhatsApp sandbox
  * -> "Receive a message": https://<tuma-host>/api/whatsapp-twilio
  */
@@ -24,6 +29,7 @@ import { createOrderStore } from "../src/lib/supabase-order-store.js";
 import { copy } from "../src/lib/copy.js";
 import { readRawBody } from "./_body.js";
 import { verifyTwilioSignature } from "../src/lib/verify.js";
+import { twiml } from "../src/lib/twiml.js";
 
 export const config = { api: { bodyParser: false } };
 
@@ -34,23 +40,7 @@ function stripWhatsAppPrefix(addr: string): string {
   return s.startsWith("+") ? s.slice(1) : s;
 }
 
-function escapeXml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
 
-function twiml(messages: Array<{ to: string; body: string }>): string {
-  const items = messages
-    .map(
-      (m) =>
-        '  <Message to="whatsapp:+' +
-        m.to.replace(/^\+/, "") +
-        '">' +
-        escapeXml(m.body) +
-        "</Message>"
-    )
-    .join("\n");
-  return '<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n' + items + "\n</Response>";
-}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "POST") return res.status(405).send("Method not allowed");
@@ -81,6 +71,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).send("Bad payload");
   }
 
+  // The Twilio number this message arrived on — the "from" of every reply.
+  const replyFrom = params.get("To") || "";
+
   const captured: Array<{ to: string; body: string }> = [];
   const flow = new PaymentFlow({
     store,
@@ -93,7 +86,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const from = stripWhatsAppPrefix(params.get("From") || "");
     const text = params.get("Body") || "";
     console.log("twilio webhook routed", { from: from, textLength: text.length });
-    if (!from || !text) return sendXml(twiml([]));
+    if (!from || !text) return sendXml(twiml([], replyFrom));
 
     // Vendor confirms an order: "CONFIRM TUMA-1042"
     if (/^confirm\s+\S+/i.test(text)) {
@@ -101,11 +94,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const order = await store.get(ref);
       if (!order) {
         captured.push({ to: from, body: "Sorry, I could not find order " + ref + "." });
-        return sendXml(twiml(captured));
+        return sendXml(twiml(captured, replyFrom));
       }
-      if (from !== order.vendorId) return sendXml(twiml([]));
+      if (from !== order.vendorId) return sendXml(twiml([], replyFrom));
       await flow.confirmOrder(order);
-      return sendXml(twiml(captured));
+      return sendXml(twiml(captured, replyFrom));
     }
 
     // Otherwise this is a buyer reply on their open order: find their
@@ -113,14 +106,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const order = await flow.findOpenOrderFor(from);
     if (!order) {
       captured.push({ to: from, body: copy.unrecognized() });
-      return sendXml(twiml(captured));
+      return sendXml(twiml(captured, replyFrom));
     }
     await flow.handleBuyerReply(order, text);
-    return sendXml(twiml(captured));
+    return sendXml(twiml(captured, replyFrom));
   } catch (err) {
     console.error("twilio whatsapp webhook error:", err);
     try {
-      return sendXml(twiml(captured));
+      return sendXml(twiml(captured, replyFrom));
     } catch {
       return res.status(200).send("ok");
     }
