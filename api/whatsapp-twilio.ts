@@ -15,10 +15,11 @@
  * <Response><Message> items. (Production senders allow REST Body sends;
  * see src/lib/whatsapp.ts.)
  *
- * TwiML RULE (learned live 2026-10-13): a <Message> in a webhook response
- * that names a "to" MUST also name a "from" (the Twilio number that received
- * the inbound message) — a to-only message is silently dropped by Twilio:
- * the webhook returns 200, state moves, and no reply ever reaches the phone.
+ * SANDBOX GOTCHA (learned live 2026-10-13): replies only work on the
+ * ACTIVATED WhatsApp sandbox (+1 415 523 8886, join phrase per console).
+ * The trial TRYOUT surface (+1 737 250 8034) also POSTs here — signature
+ * verifies, state moves — but never delivers the TwiML response as a
+ * message. A day of "silent replies" was that, not the TwiML shape.
  *
  * Configure in Twilio Console -> Messaging -> Try it out -> WhatsApp sandbox
  * -> "Receive a message": https://<tuma-host>/api/whatsapp-twilio
