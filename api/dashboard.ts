@@ -165,6 +165,7 @@ function pageHtml(token: string, vendor: string): string {
     "<!doctype html><html lang='en'><head><meta charset='utf-8'>" +
     "<meta name='viewport' content='width=device-width,initial-scale=1'>" +
     "<title>Tuma · Vendor dashboard</title>" +
+    "<link rel='icon' type='image/svg+xml' href='/favicon.svg'>" +
     "<style>" + PAGE_CSS + "</style></head><body>" +
     "<header><h1><span class='tuma'>Tuma</span> · Vendor dashboard</h1>" +
     "<span id='live'><span class='dot'></span>Connecting…</span></header>" +
